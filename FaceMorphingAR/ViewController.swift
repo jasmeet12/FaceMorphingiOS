@@ -1,75 +1,303 @@
 //
 //  ViewController.swift
-//  FaceMorphingAR
+//  faceDetection
 //
-//  Created by Jasmeet Kaur on 12/06/18.
+//  Created by Jasmeet Kaur on 09/06/18.
 //  Copyright © 2018 Jasmeet Kaur. All rights reserved.
 //
 
 import UIKit
-import SceneKit
-import ARKit
+import AVFoundation
+import Vision
 
-class ViewController: UIViewController, ARSCNViewDelegate {
 
-    @IBOutlet var sceneView: ARSCNView!
+enum faceLandmakrs{
     
+    case faceContour
+    case leftEye
+    case rightEye
+    case leftEyebrow
+    case rightEyebrow
+    case leftPupil
+    case rightPupil
+    case nose
+    case noseCrest
+    case innerLips
+    case outerLips
+    
+    
+    
+}
+
+class ViewController: UIViewController,AVCaptureVideoDataOutputSampleBufferDelegate {
+    
+    var session = AVCaptureSession()
+    var requests = [VNRequest]()
+    var featureLayer = CAShapeLayer()
+    var landMarks:LandMarks = LandMarks()
     override func viewDidLoad() {
         super.viewDidLoad()
-        
-        // Set the view's delegate
-        sceneView.delegate = self
-        
-        // Show statistics such as fps and timing information
-        sceneView.showsStatistics = true
-        
-        // Create a new scene
-        let scene = SCNScene(named: "art.scnassets/ship.scn")!
-        
-        // Set the scene to the view
-        sceneView.scene = scene
+        // Do any additional setup after loading the view, typically from a nib.
     }
+    
+    
     
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         
-        // Create a session configuration
-        let configuration = ARWorldTrackingConfiguration()
-
-        // Run the view's session
-        sceneView.session.run(configuration)
+        startLiveVideo()
+        startFaceDetection()
     }
     
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
         
-        // Pause the view's session
-        sceneView.session.pause()
+        featureLayer.frame = view.frame
     }
-
-    // MARK: - ARSCNViewDelegate
     
-/*
-    // Override to create and configure nodes for anchors added to the view's session.
-    func renderer(_ renderer: SCNSceneRenderer, nodeFor anchor: ARAnchor) -> SCNNode? {
-        let node = SCNNode()
-     
-        return node
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        
+        
+        featureLayer.strokeColor = UIColor.red.cgColor
+        featureLayer.lineWidth = 2.0
+        
+        //needs to filp coordinate system for Vision
+        featureLayer.setAffineTransform(CGAffineTransform(scaleX: -1, y: -1))
+        featureLayer.zPosition = 100
+        // view.layer.addSublayer(featureLayer)
     }
-*/
     
-    func session(_ session: ARSession, didFailWithError error: Error) {
-        // Present an error message to the user
+    
+    func startLiveVideo() {
+        //1
+        session.sessionPreset = AVCaptureSession.Preset.photo
+        
+        let captureDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: AVMediaType.video, position: .front)
+        
+        
+        //2
+        let deviceInput = try! AVCaptureDeviceInput(device: captureDevice!)
+        let deviceOutput = AVCaptureVideoDataOutput()
+        deviceOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)]
+        deviceOutput.setSampleBufferDelegate(self, queue: DispatchQueue.global(qos: DispatchQoS.QoSClass.default))
+        session.addInput(deviceInput)
+        session.addOutput(deviceOutput)
+        
+        //3
+        let imageLayer = AVCaptureVideoPreviewLayer(session: session)
+        imageLayer.frame = self.view.bounds
+        imageLayer.zPosition = 0
+        self.view.layer.addSublayer(imageLayer)
+        
+        
+        session.startRunning()
+    }
+    
+    
+    func startFaceDetection(){
+        
+        let request = VNDetectFaceLandmarksRequest(completionHandler: self.handleLandmark)
+        
+        self.requests = [request]
+    }
+    
+    func handleLandmark(request:VNRequest,error:Error?){
+        
+        guard let observations = request.results as? [VNFaceObservation] else {
+            fatalError("unexpected result type!")
+        }
+        
+        DispatchQueue.main.async() {
+            self.view.layer.sublayers?.removeSubrange(1...)
+            for face in observations {
+                self.addFaceLandmarksToImage(face)
+            }
+        }
+        
+        
         
     }
     
-    func sessionWasInterrupted(_ session: ARSession) {
-        // Inform the user that the session has been interrupted, for example, by presenting an overlay
+    
+    func addFaceLandmarksToImage(_ face: VNFaceObservation) {
+        
+        //Bounding Box
+        
+        let boundingBox = face.boundingBox
+        let size = CGSize(width: boundingBox.width * self.view.bounds.width,
+                          height: boundingBox.height * self.view.bounds.height)
+        let origin = CGPoint(x: boundingBox.minX * self.view.bounds.width,
+                             y: (1 - boundingBox.maxY) * self.view.bounds.height)
+        
+        
+        
+        
+        let outline = CALayer()
+        outline.frame = CGRect(origin: origin, size: size)
+        outline.borderWidth = 2.0
+        outline.borderColor = UIColor.red.cgColor
+        outline.setAffineTransform(CGAffineTransform(scaleX: -1, y: -1))
+        
+        self.view.layer.addSublayer(outline)
+        
+        var typeLandmark:faceLandmakrs = .faceContour
+        if let landmark = face.landmarks?.faceContour {
+            
+            self.convetPoints(landmark:landmark,width:size.width,height:size.height,frame:outline.frame,typeLandmark)
+        }
+        
+        
+        if let landmark = face.landmarks?.leftEye {
+            
+                typeLandmark = .leftEye
+            self.convetPoints(landmark:landmark,width:size.width,height:size.height,frame:outline.frame,typeLandmark)
+        }
+        
+        if let landmark = face.landmarks?.rightEye {
+            
+            typeLandmark = .rightEye
+        self.convetPoints(landmark:landmark,width:size.width,height:size.height,frame:outline.frame,typeLandmark)
+        }
+        
+        if let landmark = face.landmarks?.leftEyebrow {
+            
+            typeLandmark = .leftEyebrow
+            self.convetPoints(landmark:landmark,width:size.width,height:size.height,frame:outline.frame,typeLandmark)
+        }
+        
+        if let landmark = face.landmarks?.rightEyebrow {
+           
+            typeLandmark = .rightEyebrow
+            self.convetPoints(landmark:landmark,width:size.width,height:size.height,frame:outline.frame,typeLandmark)
+        }
+        
+        if let landmark = face.landmarks?.leftPupil {
+            
+           typeLandmark = .leftPupil
+            self.convetPoints(landmark:landmark,width:size.width,height:size.height,frame:outline.frame,typeLandmark)
+        }
+        
+        if let landmark = face.landmarks?.rightPupil {
+            
+            typeLandmark = .rightPupil
+            self.convetPoints(landmark:landmark,width:size.width,height:size.height,frame:outline.frame,typeLandmark)
+        }
+        
+        if let landmark = face.landmarks?.nose {
+            
+            typeLandmark = .nose
+            self.convetPoints(landmark:landmark,width:size.width,height:size.height,frame:outline.frame,typeLandmark)
+        }
+        
+        if let landmark = face.landmarks?.noseCrest {
+            
+            typeLandmark = .noseCrest
+            self.convetPoints(landmark:landmark,width:size.width,height:size.height,frame:outline.frame,typeLandmark)
+        }
+        
+        if let landmark = face.landmarks?.outerLips {
+            
+            typeLandmark = .outerLips
+            self.convetPoints(landmark:landmark,width:size.width,height:size.height,frame:outline.frame,typeLandmark)
+        }
+        
+        if let landmark = face.landmarks?.innerLips {
+            
+            typeLandmark = .innerLips
+            self.convetPoints(landmark:landmark,width:size.width,height:size.height,frame:outline.frame,typeLandmark)
+        }
+        
         
     }
     
-    func sessionInterruptionEnded(_ session: ARSession) {
-        // Reset tracking and/or remove existing anchors if consistent tracking is required
+    
+    
+    func convetPoints(landmark :VNFaceLandmarkRegion2D,width:CGFloat,height:CGFloat,frame:CGRect,_ type:faceLandmakrs = .faceContour){
+        
+        let path = UIBezierPath()
+        
+        for i in 0...landmark.pointCount - 1 { // last point is 0,0
+            let point = landmark.normalizedPoints[i]
+            if i == 0 {
+                path.move(to: CGPoint(x: CGFloat(point.x) * width, y: CGFloat(point.y) * height))
+            } else {
+                path.addLine(to: CGPoint(x:  CGFloat(point.x) * width, y: CGFloat(point.y) * height))
+            }
+        }
+        DispatchQueue.main.async {
+            self.draw(path:path,frame:frame)
+        }
+    }
+    
+    func draw(path:UIBezierPath,frame:CGRect){
+        
+        let layer = CAShapeLayer()
+        layer.frame = frame
+        layer.lineWidth = 2.0
+        layer.strokeColor = UIColor.blue.cgColor
+        layer.fillColor = nil
+        layer.path = path.cgPath
+        layer.setAffineTransform(CGAffineTransform(scaleX: -1, y: -1))
+        self.view.layer.addSublayer(layer)
         
     }
+    
+    
+    func createLandMark(points:[CGPoint],type:faceLandmakrs){
+//        
+//        switch type {
+//            
+//        case .rightEye:
+//            landMarks.rightEye.startPoint = points[0]
+//        case .leftEye:
+//            
+//        case .rightEye:
+//            <#code#>
+//        case .leftEyebrow:
+//            <#code#>
+//        case .rightEyebrow:
+//            <#code#>
+//        case .leftPupil:
+//            <#code#>
+//        case .rightPupil:
+//            <#code#>
+//        case .nose:
+//            <#code#>
+//        case .noseCrest:
+//            <#code#>
+//        case .innerLips:
+//            <#code#>
+//        case .outerLips:
+//            <#code#>
+//        }
+//        
+//        
+        
+    }
+    
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard let pixelBuffer = sampleBuffer.imageBuffer  else {
+            return
+        }
+        
+        var requestOptions:[VNImageOption : Any] = [:]
+        
+        if let camData = CMGetAttachment(sampleBuffer, kCMSampleBufferAttachmentKey_CameraIntrinsicMatrix, nil) {
+            requestOptions = [.cameraIntrinsics:camData]
+        }
+        
+        //let orientation = CGImagePropertyOrientation(rawValue: UInt32(compensatingEXIFOrientation(forDevicePosition:.front,deviceOrientation:UIDevice.current.orientation).rawValue))
+        
+      //  let orientation = UInt32(UIImage.Orientation.leftMirrored.rawValue)
+        let imageRequestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: CGImagePropertyOrientation(rawValue: 5)!, options: requestOptions)
+        
+        do {
+            try imageRequestHandler.perform(self.requests)
+        } catch {
+            print(error)
+        }
+    }
+    
 }
+
